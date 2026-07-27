@@ -409,11 +409,17 @@ function cleanWhitelist (whitelist) {
  */
 async function discardEligibleTab(tab, options, tempWhitelist = null) {
   // log('discardEligibleTab', tab.url);
-  if (!(await isExcluded(tab, options, tempWhitelist) &&
+  if (!(await isExcluded(tab, options, tempWhitelist)) &&
       !(options[storage.ONLINE_CHECK] && !navigator.onLine) &&
-      !(options[storage.BATTERY_CHECK] && chargingMode))) {
+      !(options[storage.BATTERY_CHECK] && chargingMode)) {
     // log('discardEligibleTab', tab.index, tab.id);
     discardOrSuspendTab(tab, options[storage.SUSPEND_MODE]);
+  }
+  else {
+    // FIX: If tab couldn't be discarded due to temporary conditions, reschedule the discard
+    // This handles cases where tabs fail checks but might be eligible later
+    log('discardEligibleTab: Tab', tab.id, 'skipped due to exclusion/conditions, rescheduling...');
+    rescheduleTabTimer(tab);
   }
 }
 
@@ -468,6 +474,27 @@ function resetTabTimer(tab) {
     }
     else {
       // log("Skipping tab timer reset: ",tab);
+    }
+  });
+}
+
+/**
+ * Reschedule the discard timer for a tab that failed eligibility checks.
+ * This gives tabs another chance to be discarded after a shorter delay.
+ * @param {chrome.tabs.Tab}     tab
+ */
+function rescheduleTabTimer(tab) {
+  storage.getOption(storage.DISCARD_TIME, function (discardTime) {
+    if (discardTime === '0') {
+      return; // Never discard mode
+    }
+    
+    if (!isDiscarded(tab) && !tab.active && !isSpecialTab(tab)) {
+      // Reschedule with a 15-30 second retry delay instead of the full discard time
+      const retryDelay = 20; // seconds
+      const whenToDiscard = Math.round(Date.now() + (retryDelay * 1000));
+      log('Rescheduling discard retry for tab', tab.id, 'in', retryDelay, 'seconds');
+      chrome.alarms.create(String(tab.id), {when: whenToDiscard});
     }
   });
 }
